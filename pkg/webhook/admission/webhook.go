@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/runtime/inject"
 	atypes "sigs.k8s.io/controller-runtime/pkg/webhook/admission/types"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/internal/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/types"
 )
 
@@ -112,6 +113,7 @@ var _ Handler = &Webhook{}
 // deny the request if anyone denies.
 func (w *Webhook) Handle(ctx context.Context, req atypes.Request) atypes.Response {
 	if req.AdmissionRequest == nil {
+		metrics.FailedRequests.WithLabelValues(w.Name).Inc()
 		return ErrorResponse(http.StatusBadRequest, errors.New("got an empty AdmissionRequest"))
 	}
 	var resp atypes.Response
@@ -121,6 +123,8 @@ func (w *Webhook) Handle(ctx context.Context, req atypes.Request) atypes.Respons
 	case types.WebhookTypeValidating:
 		resp = w.handleValidating(ctx, req)
 	default:
+		metrics.FailedRequests.WithLabelValues(w.Name).Inc()
+		metrics.InternalErrorRequests.WithLabelValues(w.Name).Inc()
 		return ErrorResponse(http.StatusInternalServerError, errors.New("you must specify your webhook type"))
 	}
 	resp.Response.UID = req.AdmissionRequest.UID
@@ -135,6 +139,8 @@ func (w *Webhook) handleMutating(ctx context.Context, req atypes.Request) atypes
 			return resp
 		}
 		if resp.Response.PatchType != nil && *resp.Response.PatchType != admissionv1beta1.PatchTypeJSONPatch {
+			metrics.FailedRequests.WithLabelValues(w.Name).Inc()
+			metrics.InternalErrorRequests.WithLabelValues(w.Name).Inc()
 			return ErrorResponse(http.StatusInternalServerError,
 				fmt.Errorf("unexpected patch type returned by the handler: %v, only allow: %v",
 					resp.Response.PatchType, admissionv1beta1.PatchTypeJSONPatch))
@@ -144,8 +150,11 @@ func (w *Webhook) handleMutating(ctx context.Context, req atypes.Request) atypes
 	var err error
 	marshaledPatch, err := json.Marshal(patches)
 	if err != nil {
+		metrics.FailedRequests.WithLabelValues(w.Name).Inc()
 		return ErrorResponse(http.StatusBadRequest, fmt.Errorf("error when marshaling the patch: %v", err))
 	}
+
+	metrics.SucceededRequests.WithLabelValues(w.Name).Inc()
 	return atypes.Response{
 		Response: &admissionv1beta1.AdmissionResponse{
 			Allowed:   true,
@@ -162,6 +171,7 @@ func (w *Webhook) handleValidating(ctx context.Context, req atypes.Request) atyp
 			return resp
 		}
 	}
+	metrics.SucceededRequests.WithLabelValues(w.Name).Inc()
 	return atypes.Response{
 		Response: &admissionv1beta1.AdmissionResponse{
 			Allowed: true,
